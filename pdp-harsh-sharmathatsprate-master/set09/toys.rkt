@@ -1,0 +1,1547 @@
+;;                       "The Marvellous Toy"                                 ;;
+
+
+;;The illustration deals with delivering a toy for a child who can play with it
+;;by a few key strokes.
+;;The key strokes are:
+;;"s":makes a new square toy.
+;;"t":creates a new throbber.
+;;"f":draws an deflatable football.
+;;"w":draws a clock for the system which counts the number of ticks that have
+;;occured after the creation of the clock.
+;;All the above toys are created at the center of the target.
+
+;;The program can be executed by using
+;;(run rate speed)
+;;example :(run 0.1 10)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+#lang racket                     ;;Used here as to determine language from
+;;source.
+
+(require rackunit)               ;;In built module for testing framework.
+(require "extras.rkt")           ;;A file inported.
+(require 2htdp/universe)         ;;A racket module for using big bang functions.
+(require 2htdp/image)            ;;A racket module for using image functions.
+(check-location "09" "toys.rkt") ;;To check location of file.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;Functions provided for Automated Testing.
+
+(provide
+ make-world
+ run
+ make-square-toy
+ make-throbber
+ make-clock
+ make-football
+ PlaygroundState<%>
+ WorldState<%>
+ Toy<%>)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; CONSTANTS used in the program.:
+
+;;Constants for the World:
+(define CANVAS-WIDTH 500)
+(define CANVAS-HEIGHT 600)
+(define RIGHT-BOUNDARY 580)
+(define BOTTOM-BOUNDARY 580)
+(define EMPTY-SCENE (empty-scene 500 600))
+(define TARGET-X 250)                      ;;initial x-coordinate of the target.
+(define TARGET-Y 300)                      ;;initial y-coordinate of the target.
+
+;;Constants for Key-event:
+(define SQUARE-KE "s")
+(define FOOTBALL-KE "f")
+(define THROBBER-KE "t")
+(define CLOCK-KE "w")
+(define INVALID-KE " ")
+
+;;Constants for Mouse:
+(define BUTTON-DOWN-MOUSE-EVENT "button-down")
+(define BUTTON-UP-MOUSE-EVENT "button-up")
+(define DRAG-MOUSE-EVENT "drag")
+(define INVALID-MOUSE-EVENT "leave")
+
+;;Constants for Colours:
+(define SQUARE-COLOR "violet")
+(define THROBBER-COLOR "green")
+
+;;Constants for Direction:
+(define RIGHT "right")
+(define LEFT "left")
+
+;;Constant for FootballToy:
+(define FOOTBALL "football.jpg")
+(define FOOTBALL1 (bitmap "football.jpg"))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;Data Definitions:
+
+;;A Direction is one of
+;;--Left    interp:The square toy moves in left direction.
+;;--Right   interp:The square toy moves in right direction.
+;;template:
+;;direction-fn :Direction -> ??
+#;(define (direction-fn direction)
+    (cond
+      [(string=? dir LEFT)...]
+      [(string=? dir RIGHT)...]))
+
+;;ListofToy<%> is a list of interface toy.
+;;A list ofToy<%> can be either of:
+;;--empty
+;;--(cons Toy<%> LOT)
+
+;;Template:
+#;(define (fn lot)
+    (cond
+      [(empty? lot)..]
+      [else(...
+            (first-lot)
+            (fn (rest lot)))]))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; INTERFACES ;;
+
+;;;; Toy Interface
+
+(define Widget<%> 
+  (interface ()
+    
+    ;; -> Toy<%>
+    ;; returns the Toy<%> that should follow this one after a tick
+    after-tick                             
+    
+    ;; Scene -> Scene
+    ;; Returns a Scene like the given one, but with this toy drawn
+    ;; on it.
+    render
+    
+    ;; -> Int
+    ;; Returns the x or y position of the center of the toy
+    toy-x
+    toy-y
+    
+    ;; -> Int
+    ;; RETURNS: some data related to the toy.  The interpretation of
+    ;; this data depends on the class of the toy.
+    ;; for a square, it is the velocity of the square (rightward is
+    ;; positive)
+    ;; for a throbber, it is the current radius of the throbber
+    ;; for the clock, it is the current value of the clock
+    ;; for a football, it is the current size of the football (in
+    ;; arbitrary units; bigger is more)
+    toy-data))
+
+(define Toy<%>
+  (interface (Widget<%>)))
+;;;; WorldState Interface
+
+(define WorldState<%>
+  (interface()
+    
+    ;; -> WorldState<%>
+    ;;Returns a world followed by each tick.
+    after-tick
+    
+    ;; -> Scene
+    ;;Retuns a scene depicting the world.
+    on-draw
+    
+    ;;Int Int MouseEvent->WorldState<%>
+    ;;Retuns the WorldState<%> after the given mouse event.
+    after-mouse-event
+    
+    ;;KeyEvent->WorldState<%>
+    ;;Returns the WorldState<%> after the given key event.
+    after-key-event
+    
+    ;; ->Integer    
+    ;;Returns the x and y co-ordinate of the target.
+    target-x
+    target-y
+    
+    ;; ->Boolean
+    ;;Returns a boolean result which determines
+    ;;whether the target is selected or not.
+    target-selected?
+    
+    ;; ->ListOfToys<%>
+    get-toys))
+
+;;;; PlaygroundState Interface
+
+(define PlaygroundState<%>
+  (interface (WorldState<%>)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; setting up the world
+
+;;run : PosNum PosInt -> PlaygroundState<%> 
+;;GIVEN: a frame rate (in seconds/tick) and a square-speed (in pixels/tick),
+;;creates and runs a world in which square toys travel at the given
+;;speed.
+;;RETURNS: the final state of the world.
+
+;; BIG BANG EXPRESSION.
+
+;; (big-bang (state-expr clause ...)
+;; a big-bang expression returns the last world when the
+;; stop condition is satisfied.
+;; big-bang is responsible to run the animation.
+;; on-draw calls world to scene when we need to draw the scene on the screen.
+;; after-key-event responses to the keyevent whenever the keyevent occurs.
+
+
+(define (run frame-rate speed)
+  (big-bang (make-world speed)
+            
+            (on-tick
+             ;;PlaygroundState<%>->PlaygroundState<%>
+             ;;Given: An object for the world.
+             ;;Returns:A world after the tick event.
+             (lambda (toy) (send toy after-tick))
+             frame-rate)
+            
+            (on-key
+             ;;PlaygroundState<%> KeyEvent->PlaygroundState<%>
+             ;;Given: An object for the world and an key event..
+             ;;Returns:A world after the key event.
+             (lambda (toy ke) (send toy after-key-event ke)))
+            
+            
+            (on-draw
+             ;;PlaygroundState<%>->PlaygroundState<%>
+             ;;Given: An object for the world and an key event..
+             ;;Returns:A world after applying the other events of any..
+             (lambda (toy) (send toy on-draw)))
+            
+            
+            (on-mouse
+             ;;PlaygroundState<%> Integer Integer MouseEvent->PlaygroundState<%>
+             ;;Given: An object for the world a mouse event and the x and y
+             ;;coordinates for the mouse event.
+             ;;Returns:A world after applying the other events of any..
+             (lambda (toy x y me)(send toy after-mouse-event x y me)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;Every interface is implemented using classes. Here the WorldState interface
+;;is implemented using WorldState class.
+
+;;A WorldState is a
+
+;;Constructor Template.
+;;(new WorldState%
+;;[target][target][toys toys][speed speed] [ticks ticks])
+
+;;Interpretation:
+;;The WorldState represents a world which contains our target,a sqaure toy,
+;;a throbble,a clock and a football. 
+
+
+(define WorldState%
+  (class* object% (WorldState<%>)
+    (init-field target) ;;The target that we call on the scene.
+    (init-field toys)   ;;The list of toys on the scene.
+    (init-field speed)  ;;The speed of our square toy.
+   ; (init-field ticks)  ;;The ticks that generate the clock on the screen.
+    
+    (super-new)
+    
+    ;;after-tick: ->WorldState
+    ;;RETURNS:A world after the tick.
+    ;;EXAMPLES:as covered in test cases
+    (define/public (after-tick)
+      (new WorldState%
+           [target target]
+           [toys (map
+                  ;; Toy -> Toy
+                  ;; GIVEN: a Toy object
+                  ;; RETURNS: a Toy after a tick 
+                  (lambda(toy)(send toy after-tick))
+                  toys)]
+           [speed speed]))
+           ;[ticks ticks]))
+    
+    ;;on-draw: -> Scene
+    ;;RETURNS:A scene with world rendered on it.
+    ;;EXAMPLES: as covered in test cases       
+    (define/public (on-draw)
+      (foldr
+       ;; Toy Scene -> Scene
+       ;; GIVEN : a toy and a scene
+       ;; RETURNS : renders a toy onto the scene
+       (lambda (toy scene)
+         (send toy render scene))
+       (send target render)
+       toys))
+    
+    ;;after-mouse-event:Int Int MouseEvent -> WorldState
+    ;;GIVEN :Mouse co-ordinates and a mouse event.
+    ;;RETURNS: World after mouse event.
+    ;;EXAMPLES: as covered in test cases
+    (define/public (after-mouse-event mx my event)
+      (new WorldState%
+           [target (send target after-mouse-event mx my event)]
+           [toys toys]
+           [speed speed]))
+          ;; [ticks ticks]))
+    
+    ;;after-key-event: KeyEvent-> WorldState
+    ;;GIVEN:a keyevent to the world.
+    ;;RETURNS:a world after the key event.
+    ;;EXAMPLES:as covered in test cases
+    ;;STRATEGY: cases on KeyEvent
+    (define/public (after-key-event ke)
+      (cond
+        ;; The Square Key event.
+        [(key=? ke SQUARE-KE)
+         (new WorldState%
+              [target target]
+              [toys (cons (make-square-toy(target-x)(target-y)
+                                          speed)toys)]
+              [speed speed])]
+             ; [ticks ticks])]
+        
+        ;;The Throbber Key event.
+        [(key=? ke THROBBER-KE)
+         (new WorldState%
+              [target target]
+              [toys (cons (make-throbber(target-x)(target-y))
+                          toys)]
+              [speed speed])]
+              ;[ticks ticks])]
+        
+        ;;The clock key event.
+        [(key=? ke CLOCK-KE)
+         (new WorldState%
+              [target target]
+              [toys (cons (make-clock (target-x)(target-y))
+                                      toys)]
+              [speed speed])]
+              ;[ticks ticks])]
+        
+        ;;The Football key event.
+        [(key=? ke FOOTBALL-KE)
+         (new WorldState%
+              [target target]
+              [toys (cons (make-football (target-x) (target-y))
+                          toys)]
+              [speed speed])]
+             ; [ticks ticks])]
+        [else this]))
+    
+    ;; -> Integer
+    ;; RETURNS:The x and y coordinates of the target.
+    (define/public (target-x)
+      (send target target-x))    
+    (define/public (target-y)
+      (send target target-y))   
+        
+    ;;target-selected?: ->Boolean.
+    ;;RETURNS:A boolean result whether a target is selected or not.
+    (define/public (target-selected?)
+      (send target target-selected?))
+    
+    ;;get-toys: ->ListOfToys.
+    (define/public (get-toys)
+      toys)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;Interface:Target.
+
+(define Target<%>
+  (interface()
+    after-tick
+    after-mouse-event
+    render
+    target-x
+    target-y
+    target-selected?))
+
+;;A target is a (new Target% int int int int)
+;;A target represents the circular toy.
+(define Target%
+  (class* object%(Target<%>)
+    (init-field
+     x              ;; x co-ordinate of the target
+     y              ;; y co-ordinate of the target
+     mouse-x        ;; x co-ordinate of mouse with repect to target
+     mouse-y        ;; y co-ordinate of mouse with repect to target
+     )
+    
+    (init-field selected?) ;; determine whether the target is selected? 
+    ;;Only limited privately for the target.
+    (field [ICON(circle 10 "outline" "goldenrod")])
+    (field [TARGET-RADIUS 10])
+    
+    (super-new)
+    
+    ;;after-tick: ->Target%
+    ;;RETURNS: a target after the tick.
+    ;;EXAMPLES: as covered in test cases
+    (define/public(after-tick)
+      this)
+    
+    ;;after-mouse-event: Int Int MouseEvent->Target%.
+    ;;GIVEN: The mouse coordinates and a mouse event.
+    ;;RETURNS: a target after the mouse event.
+    ;;EXAMPLES: as covered in test cases
+    ;;STRATEGY: cases on mouse event
+    (define/public (after-mouse-event mx my event)
+      (cond
+        [(mouse=? event BUTTON-DOWN-MOUSE-EVENT)
+         (send this target-after-button-down mx my)]
+        [(mouse=? event BUTTON-UP-MOUSE-EVENT)
+         (send this target-after-button-up mx my)]
+        [(mouse=? event DRAG-MOUSE-EVENT)
+         (send this target-after-drag mx my selected?)]
+        [else this]))
+    
+    ;;target-after-button-down: Int Int->Target%
+    ;;GIVEN: the mouse coordinates.
+    ;;RETURNS: the target after the button-down event.
+    ;;EXAMPLES: as covered in test cases
+    (define/public (target-after-button-down mx my)
+      (if (send this in-circle? mx my)
+          (new Target%[x x] [y y] [mouse-x mx]      
+               [mouse-y my]
+               [selected? true])
+          this))
+    
+    ;;target-after-button-up:Int Int->Target%
+    ;;GIVEN: the mouse coordinates.
+    ;;RETURNS: the target after the button-up event.
+    ;;EXAMPLES: as covered in test cases
+    (define/public (target-after-button-up mx my)
+      (new Target%[x x] [y y] [mouse-x mx]
+           [mouse-y my]
+           [selected? false]))
+    
+    ;;in-circle?:Int Int->Boolean
+    ;;GIVEN: the mouse coordinates.
+    ;;RETURNS: a boolean  which shall be used for the dragging execution.
+    (define/public (in-circle? mx my)
+      (<=
+       (+ (sqr (- x mx))
+          (sqr (- y my)))
+       (sqr TARGET-RADIUS)))
+    
+    ;;target-after-drag:Int Int Boolean->Target%
+    ;;GIVEN: the mouse coordinates and state of selection for the target.
+    ;;RETURNS: the target after the drag event.
+    (define/public (target-after-drag mx my selected?)
+      (if selected?
+          (new Target%
+               [x (send this drag-x mx)]
+               [y (send this drag-y my)]
+               [mouse-x mx]
+               [mouse-y my]
+               [selected? true])
+          this))
+    
+    ;;drag-x:Integer->Integer
+    ;;GIVEN:The x position of the mouse.
+    ;;RETURNS:The x position of the mouse in relation to the center as it
+    ;;should be a smooth drag.
+    (define/public (drag-x mx)      
+      (- mx
+         (- mouse-x x)))
+    
+    ;;drag-y:Integer->Integer
+    ;;GIVEN:The y position of the mouse.
+    ;;RETURNS:The y position of the mouse in relation to the center as it
+    ;;should be a smooth drag.    
+    (define/public (drag-y my)
+      (- my
+         (- mouse-y y)))
+    
+    ;;render: ->Scene
+    ;;RETURNS: a world with the scene rendered on it.
+    (define/public (render)
+      (place-image ICON x y EMPTY-SCENE))
+    
+    ;;target-x: ->Integer
+    ;;target-y: ->Integer
+    ;;RETURNS: x and y coordinates of the target.
+    (define/public (target-x)x)
+    (define/public (target-y)y)
+    
+    ;;target-selected?: ->target
+    ;;RETURNS:The selection state of the target.
+    (define/public (target-selected?)selected?)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; SquareToy Class
+
+;; A SquareToy is a (new SquareToy% [x Int] [y Int] [speed Int]
+;;                                    [direction Direction])
+;; INTERPRETATION:
+;; x and y represents the centre co-ordinate of the toy
+;; speed is the speed at which the square toy is moving
+;; direction is the direction in which the square toy is moving
+;; it can be "left" or "right"
+(define Square%
+  (class* object%(Widget<%>)
+    (init-field x ) ;; interp : x-cordinate of
+    ;; the center of the toy                          
+    (init-field y)  ;; interp : y-cordinate of
+    ;; the center of the toy
+    
+    (init-field speed) ;; the speed at which the
+    ;; toy moves
+    
+    (init-field direction) ;; the direction in which toy moves
+    ;; i.e either left or right
+    
+    ;;Private field associated with the square.
+    (field [SQUARE-SIDE 40])
+    (field [HALF-SQUARE-SIDE ( / SQUARE-SIDE 2)])
+    (field [SQUARE-ICON (square SQUARE-SIDE "outline" "darkred")])
+    (field [CANVAS-RIGHT-END (- CANVAS-WIDTH HALF-SQUARE-SIDE)])
+    (field [CANVAS-LEFT-END HALF-SQUARE-SIDE])
+    
+    (super-new)
+    
+    ;;after-tick: ->Toy<%>
+    ;;RETURNS: returns the toy that should follow this one after tick
+    ;;DETAILS: if on the next tick the square touches the edge of the
+    ;;         canvas, then it should start moving in the opposite direction
+    ;;         otherwise it should keep on moving in the same direction
+    ;;EXAMPLE: as covered in test cases
+    ;;STRATEGY: cases on direction
+    (define/public (after-tick)
+      (cond
+        [(string=? direction RIGHT)
+         (send this right-transition x y speed)]
+        [(string=? direction LEFT)
+         (send this left-transition x y speed)]))
+    
+    ;;right-transition: Int Int speed->Widget<%>%>
+    ;;GIVEN: the x and y coordinates and the speed for transition.
+    ;;RETURNS: the SquareToy that should follow this one after a tick
+    ;;DETAILS: if on the next tick the square touches the edge of the
+    ;;         canvas, then it should start moving in the opposite direction
+    ;;         otherwise it should keep on moving in the same direction
+    ;;EXAMPLE: as covered in test cases
+    (define/public (right-transition x y speed)
+      (cond
+        [(< (+ x speed) CANVAS-RIGHT-END)
+         (new Square%
+              [x (+ x speed)] [y y] [speed speed]
+              [direction direction])]
+        [(>= (+ x speed) CANVAS-RIGHT-END)
+         (new Square%
+              [x CANVAS-RIGHT-END] [y y] [speed speed]
+              [direction LEFT])]))  
+    
+    
+    ;;left-transition: Int Int speed-><Toy%>
+    ;;GIVEN: the x and y coordinates and the speed for transition.
+    ;;RETURNS: the Square that should follow this after a tick
+    ;;DETAILS: if on the next tick the square touches the edge of the
+    ;;         canvas, then it should start moving in the opposite direction
+    ;;         otherwise it should keep on moving in the same direction
+    ;;EXAMPLE: as covered in test cases
+    (define/public (left-transition x y speed)
+      (cond
+        [(> (- x speed) CANVAS-LEFT-END)
+         (new Square%
+              [x (- x speed)] [y y] [speed speed]
+              [direction direction])]
+        [(<= (- x speed) CANVAS-LEFT-END)
+         (new Square%
+              [x CANVAS-LEFT-END] [y y] [speed speed]
+              [direction RIGHT])]))
+    
+    ;;render: Scene->Scene
+    ;;GIVEN: a scene
+    ;;RETURNS: a scene like the given one, but with this toy drawn on it
+    ;;EXAMPLES: as covered in test cases
+    (define/public (render r)
+      (place-image SQUARE-ICON x y r))
+    
+    ;;toy-x: ->Integer
+    ;;toy-y: ->Integer
+    ;;RETURNS: x and y coordinates of the centre of the toy.
+    (define/public (toy-x) x)
+    (define/public (toy-y) y)
+    
+    ;;toy-data: -> Integer
+    ;;RETURNS: the speed of the SquareToy    
+    (define/public (toy-data) speed)
+    
+    ;;for-test:get-toy-direction: -> String
+    ;;RETURNS: the direction of the SquareToy
+    ;;EXAMPLES: as covered in test cases
+    (define/public (for-test:get-toy-direction)
+      direction)     
+    
+    ;;for-test:toy-equal?: -> Boolean
+    ;;RETURNS: true iff the two SquareToys have the same x,y co-ordinates, speed
+    ;;         and direction
+    ;;EXAMPLES: as covered in test cases
+    (define/public (for-test:toy-equal? sq1)
+      (and
+       (=
+        (send sq1 toy-x)
+        (send this toy-x))
+       (=
+        (send sq1 toy-y)
+        (send this toy-y))
+       (string=?
+        (send sq1 for-test:get-toy-direction)
+        (send this for-test:get-toy-direction))
+       (=
+        (send sq1 toy-data)
+        (send this toy-data))))))    
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;FootballToy Class
+;;A football toy is a (new FootballToy% [x Int] [y Int] [scale-count PosReal])
+;;Interpretation:
+;;A football represents the football which deacreases in size with tick.
+(define Football%
+  (class* object% (Widget<%>)
+    
+    (init-field x)  ;; x-co-ordinate of the center of football
+    (init-field y)  ;; y-co-ordinate of the center of football
+    (init-field [scale-count 1]) ;; to scale the football image
+    
+    ;; The Private field confined to football.
+    (field [FOOTBALL (scale  scale-count (bitmap "football.jpg"))])
+    
+    (super-new)
+    
+    ;;after-tick: ->Toy<%>
+    ;;RETURNS: the toy that should follow this one after a tick
+    ;;EXAMPLES: as covered in test cases      
+    (define/public (after-tick) 
+      (if (> (- scale-count 0.05) 0.01) 
+          (new Football% [x x][y y][scale-count (- scale-count  0.01)])
+          (new Football% [x x][y y][scale-count 0.001])))    
+    
+    ;;render: Scene->Scene
+    ;;GIVEN: a Scene
+    ;;RETURNS: a scene like the given one, but with the given toy
+    ;;         drawn on it
+    ;;EXAMPLES: as covered in test cases
+    (define/public (render r)
+      (place-image FOOTBALL x y r))   
+    
+    ;;(toy-x toy-y): ->Integer
+    ;;RETURNS: the x and y coordinates of the center of the toy.
+    (define/public (toy-x)x)
+    (define/public (toy-y)y)
+    
+    ;; toy-data: -> PosReal
+    ;; RETURNS: the current size of the football toy.    
+    (define/public (toy-data)scale-count)      
+    
+    ;;for-test:toy-equal?: -> Boolean
+    ;;RETURNS: true iff the two FootballToys have the same x and y co-ordinates
+    ;;         and the same size 
+    ;;EXAMPLES: as covered in test cases
+    (define/public (for-test:toy-equal? f)
+      (and
+       (=
+        (send f toy-x)
+        (send this toy-x))
+       (=
+        (send f toy-y)
+        (send this toy-y))
+       (=
+        (send f toy-data)
+        (send this toy-data))))
+    ))       
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; ClockToy Class
+;;A clock toy is a (new Clock% [x Int] [y Int] [ticks Int])
+;;INTERPRETATION:
+;; Clock represents a clock which measures the count after it is created.
+(define Clock%
+  (class* object%(Widget<%>)
+    (init-field x)     ;; represents the x-cordinate of the clock
+    (init-field y)     ;; represents the y-cordinate of the clock
+    (init-field ticks) ;; to increase the count of the number of
+                       ;; ticks initially is one
+    (field [CLOCK-COLOR "violetred"]) ;; colour of the clock
+    (field [SIZE 15])  ;; represents the size of the clock
+    
+    (super-new)
+    ;;after-tick: ->Toy<%>
+    ;;RETURNS: the toy that should follow this after a tick.
+    ;;DETAILS: the tick field is continuously incremented to represent
+    ;;         the number of ticks passed since it was created
+    ;;EXAMPLES: as covered in test cases
+    (define/public (after-tick)
+      (new Clock% [x x][y y]
+           [ticks (+ ticks 1)]))
+    
+    ;;render: Scene->Scene
+    ;;GIVEN: a scene
+    ;;RETURNS: a scene like the given one but with this toy drawn on it.
+    (define/public (render s)
+      (place-image (overlay(pulled-regular-polygon 20 8 1/4 10 "outline" "red") 
+                       (text (number->string ticks) SIZE CLOCK-COLOR))  x y s))
+
+    ;;toy-x: ->Integer
+    ;;toy-y: ->Integer
+    ;;RETURNS:The x and y coordinates of the target.
+    (define/public (toy-x)
+      x)
+    (define/public (toy-y)
+      y)
+    
+    ;;toy-data: -> Integer
+    ;;RETURNS: the number of ticks since the clock was created    
+    (define/public (toy-data)ticks)
+        
+    ;;for-test:toy-equal?: -> Boolean
+    ;;RETURNS: true iff the two Clocks have the same ticks
+    ;;         and the same x and y co-ordinates
+    ;;EXAMPLES: as covered in test cases
+    (define/public (for-test:toy-equal? c)
+      (and
+       (=
+        (send c toy-x)
+        (send this toy-x))
+       (=
+        (send c toy-y)
+        (send this toy-y))
+       (=
+        (send c toy-data)
+        (send this toy-data))))
+    ))      
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; ThrobberToy Class
+;;A throbber toy is a (new ThrobberToy% [x Int] [y Int] [count Int] [flag Int])
+;;A throbber represents a circle whose radius and colour changes
+;;whenever rendered with tick.
+;; A Throbber is a (new Throbber% [x Integer] [y Integer] [radius PosInt]
+;;                  [selected? Boolean] [saved-mx PosInt] [saved-my PosInt])
+;; A Throbber represents a throbber toy.
+;; in this version, the toy initially increased its size until radius 20 and
+;; then deccreases its radius till 5 and goes on.
+;; Throbber is also selectable and draggable
+
+(define Throbber%
+  (class* object%(Widget<%>)
+    (init-field x)
+    (init-field y)                  ;;Throbbers x position.
+    (init-field radius)             ;;Throbbers y position.
+    (init-field flag)               ;;flag event for changing the
+                                    ;;orientation of throbbers expansion.
+    (field [THROBBER-ICON (circle radius "solid" "cornflowerblue")])
+    (field [EXPAND 1])
+    (field [CONTRACT -1])
+    (field [CIRCLE-RADIUS 5])
+    (field [MAX-RADIUS 20])
+    (super-new)
+    
+    ;;after-tick: ->Throbber
+    ;;RETURNS :A throbber like the given one but the radius increases and
+    ;;deacreases with every tick.
+    ;;Strategy:Use cases on throbber
+    (define/public (after-tick)
+      (make-new-throbber x y radius 
+                         (change-radius radius flag)))
+    ;;render :Scene->Scene
+    ;;Returns:A scene with the throbber rendered on it.
+    (define/public (render scene)
+      (place-image THROBBER-ICON x y scene))
+    
+    ;;toy-x : ->PosInt
+    ;;RETURNS :The x coordinate of the throbber.
+    (define/public (toy-x)x)
+    
+    ;;toy-y: ->PosInt.
+    ;;RETURNS:The y coordinate of the throbber.
+    (define/public (toy-y) y)
+    
+    ;;toy-data ->PosInt
+    ;;RETURNS:The radius of the throbber as stated in the problem set.
+    (define/public (toy-data)radius)      
+    
+    ;;make-new-throbber: PosInt PosInt PosInt Integer->Throbber 
+    ;;GIVEN: the coordinates of the throbber its radius and the flag counter.
+    ;;RETURNS: a throbber which expands and contracts according to
+    ;;         given condition.    
+    (define (make-new-throbber x y radius flag)
+      (new Throbber% [x x] [y y] [radius (+ radius flag)] 
+           [flag flag]))
+    
+    ;;change-radius: Integer Integer -> Integer
+    ;;GIVEN: radius and count of the throbber.
+    ;;RETURNS: the throbber with changed radius.
+    
+    (define (change-radius radius count)
+      (cond[(= radius CIRCLE-RADIUS) EXPAND]
+           [(= radius MAX-RADIUS) CONTRACT]
+           [else count]))
+
+    ;;for-test:toy-equal?: -> Boolean
+    ;;RETURNS: true iff the two FootballToys have the same x and y co-ordinates
+    ;;         and the same size 
+    ;;EXAMPLES: as covered in test cases
+    (define/public (for-test:toy-equal? th)
+      (and
+       (=
+        (send th toy-x)
+        (send this toy-x))
+       (=
+        (send th toy-y)
+        (send this toy-y))
+       (=
+        (send th toy-data)
+        (send this toy-data))))
+    ))
+
+;;;;;;;;;;;;;;;;;;;; End of Class Definition;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;; Function Definitions
+
+;;make-world : PosInt -> PlaygroundState<%>
+;;RETURNS: a world with a target, but no toys, and in which any
+;;square toys created in the future will travel at the given speed (in
+;;pixels/tick), also any clock created in the future will show the number
+;;of ticks since it was last created.
+;;EXAMPLE:
+;; (make-world 5 5) =>
+;;(object:WorldState% ...)
+(define (make-world speed)
+  (new WorldState%
+       [target (new Target% [x TARGET-X][y TARGET-Y] 
+                    [mouse-x TARGET-X]
+                    [mouse-y TARGET-Y]
+                    [selected? false])]
+       [toys empty]
+       [speed speed]))
+      ; [ticks ticks]))
+
+;;make-square-toy : PosInt PosInt PosInt -> SquareToy%
+;;GIVEN: an x and a y position, and a speed
+;;RETURNS: an object representing a square toy at the given position,
+;;travelling right at the given speed.
+;;EXAMPLE:
+;; (make-square-toy 10 10 1)=>
+;;(object:SquareToy% ...)
+(define (make-square-toy tx ty speed)
+  (new Square% [x tx] [y ty]
+       [speed speed][direction RIGHT]))
+
+;;make-throbber: PosInt PosInt -> ThrobberToy%
+;;GIVEN: an x and a y position
+;;RETURNS: an object representing a throbber at the given position.
+;;EXAMPLE:
+;;(make-throbber 10 10 )
+;;(object:Throbber% ...)
+(define (make-throbber x y)
+  (new Throbber% [x x][y y]
+       [radius 5][flag 1]))
+
+
+;;make-football : PosInt PostInt -> Widget<%>%>
+;;GIVEN: an x and a y position
+;;RETURNS: an object representing a clock at the given position.
+;;EXAMPLE:
+;;(make-football 10 10 )
+;;(object:Football% ...)
+(define (make-football tx ty)
+  (new Football% [x tx][y ty]))
+
+;;make-clock : PosInt PostInt -> Widget<%>%>
+;;GIVEN: an x and a y position
+;;RETURNS: an object representing a clock at the given position.
+;;EXAMPLE:
+;;(make-clock 10 10 2)
+;;(object:Clock% ...)
+(define (make-clock tx ty )
+  (new Clock% [x tx][y ty]
+       [ticks 1]))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+;;;FUNCTION FOR TESTING
+;
+;;; world-equal?: WorldState WorldState -> Boolean
+;;; GIVEN: the two worlds
+;;; RETURNS: true iff the observable properties of the two world are same
+;;; STRATEGY: combining simpler functions
+;(define (world-equal? w1 w2)
+;  (and
+;   (=
+;    (send w1 target-x)
+;    (send w2 target-x))
+;   (=
+;    (send w1 target-y)
+;    (send w2 target-y))
+;   (equal?
+;    (send w1 target-selected?)
+;    (send w2 target-selected?))
+;   (andmap
+;    (lambda (t1 t2) (send t1 for-test:toy-equal? t2))
+;    (send w1 get-toys)
+;    (send w2 get-toys))))
+;
+;;; TESTS
+;(begin-for-test
+;  (local
+;    ((define square-toy-moving-right
+;       (new Square% [x 50] [y 40] [speed 10]
+;            [direction RIGHT])))
+;    (check-true
+;     (send
+;      (send square-toy-moving-right after-tick) for-test:toy-equal?
+;      (new Square% [x 60] [y 40] [speed 10]
+;           [direction RIGHT]))
+;     "The square toy returned after tick is not as expected"))
+;  (local
+;    ((define square-toy-move-left-after-tick
+;       (new Square% [x 580] [y 40] [speed 20]
+;            [direction RIGHT])))
+;    (check-true
+;     (send
+;      (send square-toy-move-left-after-tick after-tick) for-test:toy-equal?
+;      (new Square% [x 580] [y 40] [speed 20]
+;           [direction LEFT]))
+;     "The square toy returned after tick is not as expected"))
+;  (local
+;    ((define square-toy-moving-left
+;       (new Square% [x 50] [y 40] [speed 10]
+;            [direction LEFT])))
+;    (check-true
+;     (send
+;      (send square-toy-moving-left after-tick) for-test:toy-equal?
+;      (new Square% [x 40] [y 40] [speed 10]
+;           [direction LEFT]))
+;     "The square toy returned after tick is not as expected"))
+;  (local
+;    ((define square-toy-move-right-after-tick
+;       (new Square% [x 40] [y 40] [speed 20]
+;            [direction LEFT])))
+;    (check-true
+;     (send
+;      (send square-toy-move-right-after-tick after-tick) for-test:toy-equal?
+;      (new Square% [x 20] [y 40] [speed 20]
+;           [direction RIGHT]))
+;     "The square toy returned after tick is not as expected"))
+;  (local
+;    ((define square-toy-emtpy-scene 
+;       (new Square% [x 40] [y 60] [speed 20] 
+;            [direction RIGHT])))
+;    (check-equal?
+;     (send square-toy-emtpy-scene render EMPTY-SCENE)
+;     (place-image (square 40 "outline" "darkred") 40 60 EMPTY-SCENE)
+;     "The scene displayed is not as expected."))
+;  (local
+;    ((define square-toy
+;       (new Square% [x 40] [y 60] [speed 20] 
+;            [direction RIGHT])))
+;    (check-equal?
+;     (send square-toy toy-x)
+;     40
+;     "The value displayed is not as expected."))
+;  (local
+;    ((define square-toy
+;       (new Square% [x 40] [y 60] [speed 20] 
+;            [direction RIGHT])))
+;    (check-equal?
+;     (send square-toy toy-y)
+;     60
+;     "The value displayed is not as expected."))
+;  (local
+;    ((define square-direction
+;       (new Square% [x 40] [y 60] [speed 20] 
+;            [direction RIGHT])))
+;    (check-equal?
+;     (send square-direction for-test:get-toy-direction)
+;     RIGHT
+;     "The value displayed is not as expected."))
+;  (local
+;    ((define square-equal
+;       (new Square% [x 40] [y 60] [speed 20] 
+;            [direction RIGHT])))
+;    (check-true
+;     (send square-equal for-test:toy-equal? 
+;           (make-square-toy 40 60 20))
+;     "The two squares are not equal"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys empty]     
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal? (make-world 10 ) world1
+;           "The new world is not as expected."))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-tick)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x TARGET-X] [y TARGET-Y]
+;                             [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                             [selected? false])]
+;                [toys (list
+;                       (new Square% [x 110] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 2]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event TARGET-X TARGET-Y BUTTON-DOWN-MOUSE-EVENT)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x TARGET-X] [y TARGET-Y]
+;                             [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                             [selected? true])]
+;                [toys (list
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event TARGET-X TARGET-Y BUTTON-DOWN-MOUSE-EVENT)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x TARGET-X] [y TARGET-Y]
+;                             [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                             [selected? true])]
+;                [toys (list
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))
+;  (local
+;    ((define target1
+;       (new Target% [x TARGET-X] [y TARGET-Y]
+;                    [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                    [selected? false])))            
+;    (check-equal?
+;           (send target1 after-tick)
+;           target1
+;           "The new target is not as expected"))  
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event 100 100 BUTTON-DOWN-MOUSE-EVENT)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x TARGET-X] [y TARGET-Y]
+;                             [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                             [selected? false])]
+;                [toys (list
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))     
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 40] [y 60]
+;                         [mouse-x 45] [mouse-y 55]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event 60 60 DRAG-MOUSE-EVENT)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x 55] [y 65]
+;                             [mouse-x 60] [mouse-y 60]
+;                             [selected? true])]
+;                [toys (list
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 40] [y 60]
+;                         [mouse-x 45] [mouse-y 55]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event 60 60 DRAG-MOUSE-EVENT)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x 55] [y 65]
+;                             [mouse-x 60] [mouse-y 60]
+;                             [selected? true])]
+;                [toys (list
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 40] [y 60]
+;                         [mouse-x 45] [mouse-y 55]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event 60 60 DRAG-MOUSE-EVENT)
+;           world1
+;           "The new world is not as expected"))     
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event TARGET-X TARGET-Y BUTTON-UP-MOUSE-EVENT)
+;           (new WorldState%
+;                [target (new Target%
+;                             [x TARGET-X] [y TARGET-Y]
+;                             [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                             [selected? false])]
+;                [toys (list
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event TARGET-X TARGET-Y INVALID-MOUSE-EVENT)
+;           world1
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x TARGET-X] [y TARGET-Y]
+;                         [mouse-x TARGET-X] [mouse-y TARGET-Y]
+;                         [selected? false])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-mouse-event TARGET-X TARGET-Y INVALID-MOUSE-EVENT)
+;           world1
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 50] [y 100]
+;                         [mouse-x 50] [mouse-y 100]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-key-event SQUARE-KE)
+;           (new WorldState%
+;                [target(new Target%
+;                            [x 50] [y 100]
+;                            [mouse-x 50] [mouse-y 100]
+;                            [selected? true])]
+;                [toys (list
+;                       (new Square% [x 50] [y 100] [speed 10]
+;                            [direction RIGHT])
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])                  
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 50] [y 100]
+;                         [mouse-x 50] [mouse-y 100]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-key-event CLOCK-KE)
+;           (new WorldState%
+;                [target(new Target%
+;                            [x 50] [y 100]
+;                            [mouse-x 50] [mouse-y 100]
+;                            [selected? true])]
+;                [toys (list
+;                       (new Clock% [x 50] [y 100] [ticks 1])
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])                  
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 50] [y 100]
+;                         [mouse-x 50] [mouse-y 100]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-key-event FOOTBALL-KE)
+;           (new WorldState%
+;                [target(new Target%
+;                            [x 50] [y 100]
+;                            [mouse-x 50] [mouse-y 100]
+;                            [selected? true])]
+;                [toys (list
+;                       (new Football% [x 50] [y 100])
+;                       (new Square% [x 100] [y 120] [speed 10]
+;                            [direction RIGHT])
+;                       (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                [speed 10]
+;                [ticks 1])                  
+;           "The new world is not as expected"))
+;  (local
+;      ((define world1
+;         (new WorldState%
+;              [target (new Target%
+;                           [x 50] [y 100]
+;                           [mouse-x 50] [mouse-y 100]
+;                           [selected? true])]
+;              [toys (list
+;                     (new Square% [x 100] [y 120] [speed 10]
+;                          [direction RIGHT])
+;                     (new Clock% [x 200] [y 150] [ticks 1]))] 
+;              [speed 10]
+;              [ticks 1])))
+;      (check world-equal?
+;             (send world1 after-key-event THROBBER-KE)
+;             (new WorldState%
+;                  [target(new Target%
+;                              [x 50] [y 100]
+;                              [mouse-x 50] [mouse-y 100]
+;                              [selected? true])]
+;                  [toys (list
+;                         (new Throbber% [x 50] [y 100] [radius 5] [flag 1])
+;                         (new Square% [x 100] [y 120] [speed 10]
+;                              [direction RIGHT])
+;                         (new Clock% [x 200] [y 150] [ticks 1]))] 
+;                  [speed 10]
+;                  [ticks 1])                  
+;             "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 50] [y 100]
+;                         [mouse-x 50] [mouse-y 100]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT])
+;                   (new Clock% [x 200] [y 150] [ticks 1]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check world-equal?
+;           (send world1 after-key-event INVALID-KE)
+;           world1                      
+;           "The new world is not as expected"))
+;  (local
+;    ((define world1
+;       (new WorldState%
+;            [target (new Target%
+;                         [x 50] [y 100]
+;                         [mouse-x 50] [mouse-y 100]
+;                         [selected? true])]
+;            [toys (list
+;                   (new Square% [x 100] [y 120] [speed 10]
+;                        [direction RIGHT]))] 
+;            [speed 10]
+;            [ticks 1])))
+;    (check-equal?
+;     (send world1 on-draw)
+;     (place-image (square 40 "outline" "darkred") 100 120
+;                  (place-image (circle 10 "outline" "goldenrod")
+;                               50 100 EMPTY-SCENE))
+;             "The images are not properly placed"))
+;  (local
+;    ((define football1
+;       (new Football% [x 100] [y 100])))
+;    (check-equal?
+;     (send football1 render EMPTY-SCENE)
+;     (place-image FOOTBALL1 100 100 EMPTY-SCENE)
+;     "The football image is not properly placed"))
+;  (local
+;    ((define clock1
+;       (new Clock% [x 100] [y 100]
+;                   [ticks 1])))
+;    (check-equal?
+;     (send clock1 render EMPTY-SCENE)
+;     (place-image (overlay(pulled-regular-polygon 20 8 1/4 10 "outline" "red") 
+;                  (text "1" 15 "violetred"))
+;                  100 100 EMPTY-SCENE)
+;     "The clock image is not properly placed"))
+;  (local
+;    ((define throbber1
+;       (new Throbber% [x 100] [y 100]
+;                   [radius 5] [flag 1])))
+;    (check-equal?
+;     (send throbber1 render EMPTY-SCENE)
+;     (place-image (circle 5 "solid" "cornflowerblue") 100 100 EMPTY-SCENE)
+;     "The throbber image is not properly placed")))
+;       
+
+
+
+;;Definitions:
+	(define TOY-X 380)
+	(define TOY-Y 100)
+	(define SQUARE-SPEED 100)
+	(define SQUARE-TOY (make-square-toy TOY-X TOY-Y SQUARE-SPEED))
+	(define THROBBER-TOY (make-throbber TOY-X TOY-Y))
+	(define CLOCK-TOY (make-clock TOY-X TOY-Y))
+	(define FOOTBALL-TOY (make-football TOY-X TOY-Y))
+(begin-for-test
+;;;;: 
+  (check-equal?
+   ;;1: Square speed should not change"
+   (send SQUARE-TOY toy-data)
+   SQUARE-SPEED)
+;;;;: Success
+
+;;;;: 
+  (check-equal?
+   ;;2: Throbber X position should not change"
+   (send THROBBER-TOY toy-x)
+   TOY-X)
+;;;;: Success
+
+;;;;: 
+  (check-equal?
+   ;;3: Football Y position should not change"
+   (send FOOTBALL-TOY toy-y)
+   TOY-Y)
+;;;;: Success
+
+;;: 
+  (check-equal?
+   ;;4: Square should move right"
+   (send (send SQUARE-TOY after-tick) toy-x)
+   (+ TOY-X SQUARE-SPEED))
+;;: Success
+
+;;: 
+  (check-equal?
+   ;;5: Square Y should not change"
+   (send SQUARE-TOY toy-y)
+   TOY-Y)
+;;: Success
+
+;;: 
+  (check-true
+ 
+   (<
+    (send THROBBER-TOY toy-data)
+    (send (send THROBBER-TOY after-tick) toy-data)))
+;;: Success
+
+;;: 
+  (check-true
+   ;;7: Clock should increment the tick count"
+   (< (send CLOCK-TOY toy-data) (send (send CLOCK-TOY after-tick) toy-data)))
+;;: Success
+
+;;: 
+  (check-true
+   ;;8: Football should contract"
+   (>
+    (send FOOTBALL-TOY toy-data)
+    (send (send FOOTBALL-TOY after-tick) toy-data)))
+;;: Success
+
+;;: 
+  (check-equal?
+   ;;9: Square should be restricted on right edge"
+   (send (send (send (make-square-toy 370 TOY-Y SQUARE-SPEED) after-tick) after-tick) toy-x)
+   480)
+;;: Failure
+
+
+;;: 
+  (check-equal?
+   ;;10: Square Y should not change"
+   (send (send (send SQUARE-TOY after-tick) after-tick) toy-y)
+   TOY-Y)
+;;: Success
+
+;;: 
+  (check-equal?
+   ;;11: target-x should be 350 after smooth drag"
+   (send (send (send (make-world 10) after-mouse-event 245 295 "button-down") after-mouse-event 345 395 "drag") target-x)
+   350)
+;;: Error
+
+
+;;: 
+  (check-equal?
+   ;;12: target-y should be 400 after smooth drag"
+   (send (send (send (make-world 10) after-mouse-event 245 295 "button-down") after-mouse-event 345 395 "drag") target-y)
+   400)
+;;: Error
+
+
+;;: 
+  (check-equal?
+   ;;13: 1 toy should have been created"
+   (length (send (send (make-world 10) after-key-event "s") get-toys))
+   1)
+;;: Error
+
+
+;;: 
+  (check-equal?
+   ;;14: 1 toy should have been created"
+   (length (send (send (make-world 10) after-key-event "t") get-toys))
+   1)
+;;: Error
+
+
+;;: 
+  (check-equal?
+   ;;15: 1 toy should have been created"
+   (length (send (send (make-world 10) after-key-event "w") get-toys))
+   1)
+;;: Error
+
+
+;;: 
+  (check-equal?
+  
+   (length (send (send (make-world 10) after-key-event "f") get-toys))
+   1))
+;;: Error
+
+
+
+
+
+   

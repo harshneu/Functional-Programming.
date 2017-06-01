@@ -1,0 +1,29 @@
+TA Name:- Shailesh
+Helper Name:- Vijay
+
+Correctness Score:- 12/15
+
+——————————————————————————————
+
+harsh
+
+Design Grade:- AB
+Presentation Grade:- AB
+
+——————————————————————————————
+
+shraddha2satish
+
+Design Grade:- AB
+Presentation Grade:- AB
+
+——————————————————————————————
+
+Notes:-
+
+1) No definition of child
+2) Contract for the world is wrong
+3) Smooth dragging is not working
+4) node-list-after-drag event wrong contract
+5) changing the radius causing fail tests
+6) Very confusing because ChildNode is used as a datatype without defining what it is

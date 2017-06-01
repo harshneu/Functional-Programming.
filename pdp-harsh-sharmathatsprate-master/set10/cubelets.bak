@@ -1,0 +1,1815 @@
+;; ################            Cubelets         ######################### ;;
+
+
+;;The block consists of a canvas that is 600 pixels high and 500 pixels wide.
+;;When the child types "b", a new block pops up on the screen at the location
+;;of the last button-down ;;or button-up. The block appears as a 20x20 outline
+;;square. The square is initially green. If the child types a "b" before the
+;;first button-down or button-up event, then the first block appears in an
+;;unspecified but fixed place on the canvas.
+;;A block does not move by itself,but the child can move it around using Smooth
+;;Drag. When the block is selected, it appears as red rather than green.
+;;If a block is dragged so that it contacts or overlaps another block, the two
+;;blocks become connected. We say that the blocks are teammates.The property of
+;;being a teammate is symmetric and transitive. So if block A is moved to touch
+;;block B, then a new team is formed consisting of A and all its teammates, and
+;;B and all its teammates.
+;;Two blocks overlap if they intersect at any point. For this purpose,the edges
+;;of the block are considered part of the block.
+;;Once two blocks become teammates, they remain teammates forever.
+;;When a block is moved, all its teammates move along with it. If A and B are
+;;teammates, and A is dragged in some direction, then B moves the same way.
+;;Only the selected block accumulates teammates. If A is being dragged,and B is
+;;a teammate of A, and A's motion causes B to come into contact with C, C does
+;;not become a teammate of A and B.
+
+
+;###########################################################################
+
+#lang racket
+(require "CInterface.rkt")
+(require rackunit)                     ;;Testing Module
+(require "extras.rkt")                  ;;Module with inbuilt functions used in
+;;the program scope.   
+(require 2htdp/universe)               ;;Module used for bigbang functions.
+(require 2htdp/image)                  ;;Module used to implement  images and
+;;image functions.
+(require "WidgetWorks.rkt")            ;;The framework delivered as a file
+;;called WidgetWorks.rkt that provides three interfaces and one function
+
+;##########################################################################
+
+
+;;Provides for Testing:
+(provide
+ make-block
+ StatefulInitial<%>
+         StatefulBlock<%>
+         Block<%>)
+
+;##########################################################################
+
+;;run :PosNum ->World%
+;;Given: A frame rate.
+;;Returns:The final BlockFactory.
+
+(define (run frame-rate)
+  (big-bang (make-block INITIAL-X INITIAL-Y empty)
+            (on-tick
+             ;;Block<%>->Block<%>
+             ;;Given: An object for the world.
+             ;;Returns:A world after the tick event.
+             (lambda(world)(send world after-tick)
+               world)
+             frame-rate)
+            (on-draw
+             ;;Block<%>->Block<%>
+             ;;Given: An object for the world and an key event..
+             ;;Returns:A world after applying the other events of any.
+             (lambda(world)(send world add-to-scene)))
+            (on-key
+             ;;Block<%> KeyEvent->Block<%>
+             ;;Given: An object for the world and an key event..
+             ;;Returns:A world after the key event.
+             (lambda(world kev)(send world after-key-event kev)
+               world))
+            (on-mouse
+             ;;BLock<%> Integer Integer MouseEvent->BLock<%>
+             ;;Given: An object for the world a mouse event and the x and y
+             ;;coordinates for the mouse event.
+             ;;Returns:A world after applying the other events of any..
+             (lambda(world x y mev)(send world after-mouse-event x y mev)
+               world))))
+
+
+;##########################################################################
+
+
+;; CONSTANTS
+(define BASE 0)
+(define SQUARE-LENGTH 20)
+(define HALF-SQUARE-LENGTH (/ SQUARE-LENGTH 2))
+(define BUTTON-DOWN "button-down")
+(define UNSELECTED-BLOCK "green")
+(define BUTTON-UP "button-up")
+(define DRAG "drag")
+(define SELECTED-BLOCK "red")
+(define CANVAS-WIDTH 500)
+(define CANVAS-HEIGHT 600)
+(define HALF-CANVAS-WIDTH (/ CANVAS-WIDTH 2))
+(define HALF-CANVAS-HEIGHT (/ CANVAS-HEIGHT 2))	
+(define NEW-BLOCK "b")
+(define INVALID-KEY " ")
+(define EMPTY-CANVAS (empty-scene CANVAS-WIDTH CANVAS-HEIGHT))
+(define INITIAL-X 250)
+(define INITIAL-Y 300)
+(define OUTLINE "outline")
+
+;##########################################################################
+
+;;Data Definitions:
+
+;; ListOfBlock<%> is a list of Block<%>.
+;; A ListOfBlock<%>is either:
+;;--empty
+;;--(cons Block<%> ListOfBlock<%>)
+;; Template:
+;;lot-fn :LOT-> ??
+
+#;(define (lot-function lot)
+    (cond
+      [(empty? lot)..]
+      [else (..
+             (first-lot)
+             (lot-fn(rest lot)))]))
+
+;; A ColorString is one of:
+;; --"green"
+;; --"red"
+
+;;Template:
+;;colorstring-fn: ColorString -> ??
+
+#;(define (colorstring-fn colors)
+    (cond
+      [(String=? colors "green")..]
+      [(String=? colors "red")..]))
+
+;; A listOfInitialBlockPos(loib) is a (list initial-pos-x initial-pos-y)
+
+;;Interpretation:
+;;Represents the x and y position that must be initialised in case there is no
+;;button-up or button-down event initialised.
+
+;;Template:
+;;loib-fn :LOIB ->??
+#;(define (loib-fn loib)
+    (first loib)
+    (second loib))
+
+
+
+
+;##########################################################################
+
+;;BlockFactory IS STATEFUL
+;;BlockFactory% class implementing the Block<%> interface.
+;; A BlockFactory is a (newBlockFactory% [initial-pos Target]
+;;[blocks ListOfBlock<%>])
+;; Interpretation:
+;;Represents a BlockFactory, containing a initial-pos and some blocks.
+
+
+(define BlockFactory%
+  (class* object% (Block<%>)         
+    (init-field
+      colour                ;; color of the square block 
+     teammates              ;; teammates describes the ListOfStatfulblock<%>
+      mouse-x             ;; x-position of the mouse, in pixels.
+      mouse-y             ;; y-position of the mouse, in pixels
+      initial-pos               ;; a initial-pos-- initial-pos on the scene.
+      blocks                    ;; a ListOfBlock<%> - the list of blocks
+     ;                         ;; containing all the square blocks.
+     new-block-x               ;; x position of the new block.
+     new-block-y               ;; y position of the new block.
+     selected?                 ;; if the square block is selected or not.                   
+    
+     ;                         ;;  such that the blocks in this list are 
+     ;                         ;; teammates of each other.
+    
+     [x BASE]
+     [y BASE])              
+    
+    (super-new)
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;    
+    
+    ;; Integer Integer -> Void
+    ;; GIVEN: an x and a y coordinate and the mouse event.
+    ;; EFFECT: updates this widget to the state it should have
+    ;; following the specified mouse event at the given location.
+    ;; Strategy: Communicate via state..
+    ;;Example: As used in test cases.
+    
+    (define/public (after-mouse-event mouse-x mouse-y evt)
+      (send initial-pos after-mouse-event mouse-x mouse-y evt)
+      (for-each 
+       ;;blocks->void
+       ;;Given:A stateful toy
+       ;;Returns: A block to be added to the list of block.
+       (lambda (block) (send block add-blocks blocks)) 
+       blocks)
+      (for-each 
+       ;;Blocks->VOid 
+       ;;Given:A stateful toy
+       ;;Returns: A block after the emouse event.
+       ;;Details:Checkks for the location of the last button up or button down
+       ;;        event and makes the new block on that location.       
+       (lambda (block) (send block after-mouse-event mouse-x mouse-y evt)) 
+       blocks)
+      (set! new-block-x (if (mouse=? evt BUTTON-DOWN) mouse-x new-block-x))
+      (set! new-block-x (if (mouse=? evt BUTTON-UP) mouse-x new-block-x))
+      (set! new-block-y (if (mouse=? evt BUTTON-DOWN) mouse-y new-block-y))
+      (set! new-block-y (if (mouse=? evt BUTTON-UP) mouse-y new-block-y)))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; 
+    
+    ;;after-key-event:keyevent->Void
+    ;;Given: A key event.
+    ;;Effect:Adds the block to the list of blocks based on the keyevents.
+    ;;Details:Adds a new squareblock to the list of block.
+    ;;Strategy:Use template on list and communicate via state.
+    ;;Example:Used in tests. 
+    (define/public (after-key-event kev) 
+      (cond
+        [(key=? kev NEW-BLOCK)
+         (set! blocks (cons (new Squareblock% [x new-block-x] 
+                               [y new-block-y][mouse-x 0][mouse-y 0]
+                               [blocks empty][teammates empty]) blocks))]
+        [else this]))    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;after-tick :Scene->void
+    ;;EFFECT: updates this Block<%> to a state where should be in after a tick.
+    (define/public (after-tick) this)
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-to-scene :Scene -> Scene
+    ;;Given: A scene .
+    ;;Returns: A scene with a block rendered on it.
+    ;;Strategy:Used HOF foldr onthe scene.
+    ;;Example:Used in Test cases.
+    (define/public (add-to-scene) 
+      (foldr   
+       ;;Scene->Scene
+       ;;Given:A scene 
+       ;;Returns: A scene rendered on the scene
+       (lambda (block scene) 
+         (send block add-to-scene scene))
+       (send initial-pos add-to-scene)
+       blocks))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+    ;;get-team
+    ;;Returns the blocks in the scene. 
+    (define/public (get-team) 
+      blocks)
+
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;; after-button-down : -> Widget<%>
+    ;; RETURNS: the world that should follow this one after a button-down
+    ;; DETAILS: button-up unselects the target
+    ;; EXAMPLES: as covered in test cases
+    ;;Strategy: Use cases on button down.
+    (define/public (after-button-down mx my)
+      (if (in-block? mx my)
+          (new-block-after-button-down mx my)
+          this))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;new-block-after-button-down->Widget<%>
+    ;;Given:A block.
+    ;;Effect: Updates the block to the state it should follow after button down.
+    ;;Details: sets the features of the new block incase of abutton down.
+    ;;Strategy: Comunicate via state.
+    ;;Example:Used in tests.
+    (define/public (new-block-after-button-down mx my)
+      (set! selected? true)
+      (set! colour SELECTED-BLOCK)
+      (set! mouse-x mx)
+      (set! mouse-y my)
+      (for-each
+       ;;teammate block->block
+       ;;Given:A block
+       ;;Returns:Updates new teammates after the button down..
+       (lambda (teammate)
+         (send teammate new-teammates-posn mouse-x mouse-y))
+       teammates))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;; after-drag :  Integer Integer -> Widget<%>
+    ;; GIVEN: the location of a mouse event
+    ;; RETURNS: the WorldState that should follow this one after a drag at
+    ;; the given location 
+    ;; DETAILS: if the target in the worldstate is selected, move the target by 
+    ;;          smooth dragging to a new location, otherwise ignore.
+    ;; EXAMPLES: as covered in test cases
+    ;; Strategy: Use cases on block.
+    
+    (define/public (after-drag mx my)
+      (if selected?
+          (new-block-after-drag mx my)
+          this))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;; new-block-after-drag :  Integer Integer -> Widget<%>
+    ;; GIVEN: the location of a mouse event
+    ;; RETURNS: the WorldState that should follow this one after a drag at
+    ;; the given location 
+    ;; DETAILS: if the target in the worldstate is selected, move the target by 
+    ;;          smooth dragging to a new location, otherwise ignore.
+    ;; EXAMPLES: as covered in test cases
+    ;;Strategy:Recur on Subproblems.
+    (define/public (new-block-after-drag mx my)
+      (begin
+        (add-teammates-after-drag) 
+        (for-each
+         ;;teammate block->block
+         ;;Given:A block
+         ;;Returns:Checks for the condition of the teammate after button down..
+         (lambda (teammate)
+           (send teammate new-teammates-posn mouse-x mouse-y))
+         teammates)
+        (smooth-drag mx my)
+        (for-each
+         ;;teammate block->block
+         ;;Given:A block
+         ;;Returns:Adds the teammate after drag..
+         (lambda (teammate)
+           (begin
+             (send teammate add-teammates-after-drag) 
+             (send teammate smooth-drag mx my))) 
+         teammates)))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-teammates-after-drag ->Void
+    ;;Given:No arguments.
+    ;;Returns: Adds teammates after the drag.
+    ;;Details :Add teammate to a given block if the blocks touch each other.
+    (define/public (add-teammates-after-drag)
+      (for-each
+       ;;block->void
+       ;;Given:A block
+       ;;Returns:Checks whether the blocks touch adds it if true.
+       (lambda (block)
+         (if (blocks-touch? (send block block-x) (send block block-y))
+             (add-teammate block)
+             this))
+       blocks))
+
+     
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;new-teammates-posn  Int Int ->void'
+    ;;Given: The mouse coordinates.
+    ;;Returns: Updates the mousecoordinates forthe new teammate.
+    ;;Strategy:Comunicate via state.
+    (define/public (new-teammates-posn b-mx b-my)
+      (set! mouse-x b-mx)
+      (set! mouse-y b-my))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;smooth-drag Int Int->Int
+    ;;Given:The mouse coordinates .
+    ;;Returns: Updates the mouse coordinates so that a smooth
+    ;;drag is implemented.
+    ;;Strategy:Comunicate via state.
+    ;;Examples:Used in test cases.
+    (define/public (smooth-drag mx my)      
+      (set! x (+ x (- mx mouse-x)))
+      (set! y (+ y (- my mouse-y)))
+      (set! mouse-x mx)
+      (set! mouse-y my))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-teammate :Block<%>->Void
+    ;;Given:A block
+    ;;EFFECT: adds the given block to this block's team
+    ;;Details: Updates if the new teammate has got a team mate beforehand,if
+    ;;yes the new teammember will be the teammember of the every reammate of
+    ;;the new block else will add only the new block.  
+    ;;Examples:As used in the tests.
+    ;;Strategy:Comunicate via state.
+    (define/public (add-teammate block)
+      (if (not (blocks-teammates block))
+          (begin
+            (set! teammates (append (send block block-teammates)
+                                    (cons block teammates)))
+            (for-each (lambda (member)(send member add-teammate this))
+                      (send block block-teammates)))
+          this))
+    
+    ;;blocks-teammates:Block<%> ->Void
+    ;;Given:A block
+    ;;Effect: Updates if the block is the teammate of the block or not.
+    ;;Strategy: Use HOF ormap on the teammates.
+    ;;Examples: As used in the tests.
+    (define/public (blocks-teammates block)
+      (ormap 
+       ;;teammate block->block
+       ;;Given:A block
+       ;;Returns:Checks for if the block is same as the teammate.
+       (lambda (teammate) 
+         (equal? teammate block)) 
+       teammates))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;after-button-up:Int Int ->Void
+    ;;Given:The x and y coordinates of the mouse.
+    ;;Effect: Updates the condition for the scene when mouse is up.
+    ;;Examples: As used in the tests.
+    ;;Strategy:Comunicate via state.
+    (define/public (after-button-up mx my)
+      (set! selected? false)
+      (set! colour UNSELECTED-BLOCK)
+      (set! mouse-x BASE)
+      (set! mouse-y BASE))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-blocks :blocks->void
+    ;;Given: A block
+    ;;Returns:Updates the block in the system.
+    ;;Examples: As used in the tests.
+    ;;Strategy:Comunicate via state.
+    (define/public (add-blocks blocks-from-factory)
+      (set! blocks blocks-from-factory)) 
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; 
+    
+    ;;in-block? :Int Int ->Boolean
+    ;;Given:The x and y coordinates of the block.
+    ;;Returns: true iff the mouse is inside the block else false.
+    ;;Strategy: Combine Simpler Functions.
+    ;;Examples:
+    ;;(send block in-block? 20 25)
+    ;;true
+    (define/public (in-block? mx my)  
+      (and (<= (abs (- x mx))
+               HALF-SQUARE-LENGTH)
+           (<= (abs (- y my))
+               HALF-SQUARE-LENGTH)))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    
+    ;;blocks-touch? :Int Int ->Boolean
+    ;;Given: The x and y coordinate of the block.
+    ;;Returns:True iff the blocks touch at any point else false.
+    ;;Strategy: Combine Simpler Functions.
+    ;;Examples:
+    ;;In case the toy has x and y coordinates as 50 45 and other toys is at
+    ;;(55 47) then true is returned as there is a case of intersection.
+    (define/public (blocks-touch? bx by)
+      (and (<= (abs (- x bx))
+               SQUARE-LENGTH)
+           (<= (abs (- y by))
+               SQUARE-LENGTH)))
+
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;block-x ->Int
+    ;;Returns :The x position of the block.
+    (define/public (block-x) new-block-x)
+    ;;block-y: ->Int
+    ;;Returns :The y position of the block.
+    (define/public (block-y) new-block-y)
+    ;;block-teammates: teammates->block
+    ;;Returns: the teammates of the block.
+    (define/public (block-teammates)teammates)
+    ;;block-color:color->blocks
+    ;;Returns:The color of the block.
+    (define/public (block-color) colour)
+    ;;block-mouse-x : ->Int
+    ;;Returns: the mouse positon of block
+    (define/public (block-mouse-x) mouse-x)
+    ;;block-mouse-y : ->Int
+    ;;Returns: the mouse positon of block
+    (define/public (block-mouse-y) mouse-y)
+    ;;block-selected? block->selected?
+    ;;Given :A block
+    ;;Returns: True iff the block is selected else false.
+    (define/public (block-selected?) selected?)
+    ))
+
+
+
+
+;;Class BlockFirst.
+;;The blockfirst class Implements the stateful Initial interface.
+;;A Blockfirst% is a [new Blockfirst [x Int][y Int]
+;;                   [mouse-x Int][mouse-y Int])
+
+(define BlockFirst%
+  (class* object% (StatefulInitial<%>) 
+    (init-field x y) ;; x-position of the center of initial-pos,in pixels.
+    ;; y-position of the mouse, in pixels.
+    (super-new)    
+    ;;Integer Integer MouseEvent -> Void
+    ;; EFFECT: updates this Block<%> to the 
+    ;;         state that it should be in after the given MouseEvent
+    ;;after-mouse-event
+    (define/public (after-mouse-event mx my evt)
+      empty)
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;    
+    
+    ;; -> Scene
+    ;; Returns a Scene depicting this Block<%> on it.
+    
+    (define/public (add-to-scene)
+      EMPTY-CANVAS)))
+
+
+;;A squareblock% is a new Squareblock%
+;;[x Int][y Int][selected? boolean][color color]
+;;[mouse-x int][mouse-y Int].
+
+(define Squareblock%  
+  (class* object% (StatefulBlock<%>)
+    (init-field
+     teammates                 ;; teammates describes the ListOfStatefulbock<%>
+     blocks                    ;; blocks describes the ListOfStatefulblock<%>
+     x                         ;; x-position of the center of square block
+     y
+     mouse-x               ;; x-position of the mouse, in pixels.
+     mouse-y ;; y-position of the center of square block
+     [selected? false]         ;; if the square block is selected or not.                    
+     [colour UNSELECTED-BLOCK]) ;; color of the square block 
+             
+    
+    (super-new)
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;after-mouse-event:Int Int MouseEvent -> WorldState
+    ;;GIVEN :Mouse co-ordinates and a mouse event.
+    ;;RETURNS: World after mouse event.
+    ;;EXAMPLES: as covered in test cases
+    ;;Strategy:Use cases  on mouse event.
+    
+    (define/public (after-mouse-event mx my mouse-event)
+      (cond
+        [(mouse=? mouse-event BUTTON-DOWN) 
+         (after-button-down mx my)]
+        [(mouse=? mouse-event DRAG) 
+         (after-drag mx my)]
+        [(mouse=? mouse-event BUTTON-UP) 
+         (after-button-up mx my)]
+        [else this])) 
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;; after-button-down : -> Widget<%>
+    ;; RETURNS: the world that should follow this one after a button-down
+    ;; DETAILS: button-up unselects the target
+    ;; EXAMPLES: as covered in test cases
+    ;;Strategy: Use cases on button down.
+    (define/public (after-button-down mx my)
+      (if (in-block? mx my)
+          (new-block-after-button-down mx my)
+          this))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;new-block-after-button-down->Widget<%>
+    ;;Given:A block.
+    ;;Effect: Updates the block to the state it should follow after button down
+    ;;Details: sets the features of the new block incase of a button down.
+    ;;EXAMPLES: as covered in test cases
+    ;;Strategy:Comunicate via state.
+    
+    (define/public (new-block-after-button-down mx my)
+      (set! selected? true)
+      (set! colour SELECTED-BLOCK)
+      (set! mouse-x mx)
+      (set! mouse-y my)
+      (for-each
+       ;;teammate block->block
+       ;;Given:A block
+       ;;Returns:Updates new teammates after the button down..
+       (lambda (teammate)
+         (send teammate new-teammates-posn mouse-x mouse-y))
+       teammates))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;; after-drag :  Integer Integer -> Widget<%>
+    ;; GIVEN: the location of a mouse event
+    ;; RETURNS: the WorldState that should follow this one after a drag at
+    ;; the given location 
+    ;; DETAILS: if the target in the worldstate is selected, move the target by 
+    ;;          smooth dragging to a new location, otherwise ignore.
+    ;; EXAMPLES: as covered in test cases
+    ;;Strategy: Use cases on block.
+    
+    (define/public (after-drag mx my)
+      (if selected?
+          (new-block-after-drag mx my)
+          this))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;new-block-after-drag :  Integer Integer -> Widget<%>
+    ;; GIVEN: the location of a mouse event
+    ;; RETURNS: the WorldState that should follow this one after a drag at
+    ;; the given location 
+    ;; DETAILS: if the target in the worldstate is selected, move the target by 
+    ;;          smooth dragging to a new location, otherwise ignore.
+    ;; EXAMPLES: as covered in test cases
+    ;;Strategy:Recur on Subproblems.
+    
+    
+    (define/public (new-block-after-drag mx my)
+      (begin
+        (add-teammates-after-drag) 
+        
+        (for-each
+         ;;teammate block->block
+         ;;Given:A block
+         ;;Returns:Checks for the condition of the teammate after button down..
+         (lambda (teammate)
+           (send teammate new-teammates-posn mouse-x mouse-y))
+         teammates)
+        
+        (smooth-drag mx my)
+        (for-each
+         ;;teammate block->block
+         ;;Given:A block
+         ;;Returns:Adds the teammate after drag..
+         (lambda (teammate)
+           (begin
+             (send teammate add-teammates-after-drag) 
+             (send teammate smooth-drag mx my))) 
+         teammates)))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-teammates ->Void
+    ;;Given:No arguments.
+    ;;Returns: Adds teammates after the drag.
+    ;;Details :Add teammate to a given block if the blocks touch each other.
+    ;;Strategy:Recur on subproblems.
+    (define/public (add-teammates-after-drag)
+      (for-each
+       ;;block->void
+       ;;Given:A block
+       ;;Returns:Checks whether the blocks touch adds it if true.
+       (lambda (block)
+         (if (blocks-touch? (send block block-x) (send block block-y))
+             (add-teammate block)
+             this))
+       blocks)) 
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;new-teammates-posn  Int Int ->void'
+    ;;Given: The mouse coordinates.
+    ;;Returns: Updates the mousecoordinates forthe new teammate.
+    ;;Strategy:Comunicate via state.
+    ;;Example:USed in Tests.
+    (define/public (new-teammates-posn b-mx b-my)
+      (set! mouse-x b-mx)
+      (set! mouse-y b-my))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;smooth-drag Int Int->Int
+    ;;Given:The mouse coordinates .
+    ;;Returns: Updates the mouse coordinates so that a smooth
+    ;;drag is implemented.
+    ;;Example:Used in Tests.
+    ;;Strategy:Comunicate via state.
+    (define/public (smooth-drag mx my)      
+      (set! x (+ x (- mx mouse-x)))
+      (set! y (+ y (- my mouse-y)))
+      (set! mouse-x mx)
+      (set! mouse-y my))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-teammate :Block<%>->Void
+    ;;Given:A block
+    ;;EFFECT: adds the given block to this block's team
+    ;;Details: Updates if the new teammate has got a team mate beforehand,if
+    ;;yes the new teammember will be the teammember of the every reammate of
+    ;;the new block else will add only the new block.  
+    ;;Examples:As used in the tests.
+    ;;Strategy:Comunicate via state.
+    
+    (define/public (add-teammate block)
+      (if (not (blocks-teammates block))
+          (begin
+            (set! teammates (append (send block block-teammates)
+                                    (cons block teammates)))
+            (for-each (lambda (block) (send block add-teammate this))
+                      (send block block-teammates)))
+          this))
+    
+    ;;blocks-teammates:Block<%>->Void
+    ;;Given:A block
+    ;;Effect: Updates if the block is the teammate of the block or not.
+    ;;Strategy: Use HOF ormap on the teammates.
+    ;;Examples: As used in the tests.
+    (define/public (blocks-teammates block)
+      (ormap 
+       ;;teammate block->block
+       ;;Given:A block
+       ;;Returns:Checks for if the block is same as the teammate.
+       (lambda (teammate) 
+         (equal? teammate block)) 
+       teammates))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;after-button-up:Int Int ->Void
+    ;;Given:The x and y coordinates of the mouse.
+    ;;Effect: Updates the condition for the scene when mouse is up.
+    ;;Examples: As used in the tests.
+    ;;Strategy:Comunicate via state.
+    (define/public (after-button-up mx my)
+      (set! selected? false)
+      (set! colour UNSELECTED-BLOCK)
+      (set! mouse-x BASE)
+      (set! mouse-y BASE))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-blocks :blocks->void
+    ;;Given: A block
+    ;;Returns:Updates the block in the system.
+    ;;Examples: As used in the tests.
+    ;;Strategy:Comunicate via state.
+    (define/public (add-blocks blocks-from-world)
+      (set! blocks blocks-from-world))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; 
+    
+    ;;in-block? :Int Int ->Boolean
+    ;;Given:The x and y coordinates of the block.
+    ;;Returns: true iff the mouse is inside the block else false.
+    ;;Strategy: Combine Simpler Functions.
+    ;;Examples:
+    ;;(send block in-block? 20 25)
+    ;;true
+    (define/public (in-block? mx my)  
+      (and (<= (abs (- x mx))
+               HALF-SQUARE-LENGTH)
+           (<= (abs (- y my))
+               HALF-SQUARE-LENGTH)))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    
+    ;;blocks-touch? :Int Int ->Boolean
+    ;;Given: The x and y coordinate of the block.
+    ;;Returns:True iff the blocks touch at any point else false.
+    ;;Strategy: Combine Simpler Functions.
+    ;;Examples:
+    ;;In case the toy has x and y coordinates as 50 45 and other toys is at
+    ;;(55 47) then true is returned as there is a case of intersection.
+    (define/public (blocks-touch? bx by)
+      (and (<= (abs (- x bx))
+               SQUARE-LENGTH)
+           (<= (abs (- y by))
+               SQUARE-LENGTH)))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;add-to-scene:scene->scene
+    ;;Given:A scene as is.
+    ;;Returns:A world with the block placed.
+    ;;Strategy: Combine Simpler Functions.
+    ;;Examples: As used in Tests.
+    (define/public (add-to-scene scene)
+      (place-image (square SQUARE-LENGTH OUTLINE colour) x y scene))
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    (define/public (run)this)
+    (define/public (add-stateful-widget)this)
+    (define/public (add-widget)this)
+    ;;block-x Int ->Int
+    ;;Returns :The x position of the block.
+    (define/public (block-x) x)
+    ;;block-y: Int ->Int
+    ;;Returns :The y position of the block.
+    (define/public (block-y) y)
+    ;;block-teammates: teammates->block
+    ;;Returns: the teammates of the block.
+    (define/public (block-teammates)teammates)
+    ;;block-color:color->blocks
+    ;;Returns:The color of the block.
+    (define/public (block-color) colour)
+    ;;block-mouse-x : ->Int
+    ;;Returns: the mouse positon of block
+    (define/public (block-mouse-x) mouse-x)
+    ;;block-mouse-y : ->Int
+    ;;Returns: the mouse positon of block
+    (define/public (block-mouse-y) mouse-y)
+    
+    ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    
+    ;;block-selected? block->selected?
+    ;;Given :A block.
+    ;;Returns: True iff the block is selected else false.
+    (define/public (block-selected?) selected?)))
+
+;#########################################################################
+
+
+;;make-block : NonNegInt NonNegInt ListOfBlock<%> -> Block<%>
+;;GIVEN: an x and y position, and a list of blocks
+;;WHERE: the list of blocks is the list of blocks already on the BlockFactory.
+;;RETURNS: a new block, at the given position, with no teammates
+;;NOTE: it is up to you as to whether you use the third argument or
+;;not.  Some implementations may use the third argument; others may not.
+
+
+(define (make-block tx ty blocks)
+  (new BlockFactory% [initial-pos (new BlockFirst% [x 200] [y INITIAL-X])]
+       [mouse-x 205][mouse-y 245][new-block-x tx][new-block-y ty]
+       [blocks blocks]
+       [selected? false][colour UNSELECTED-BLOCK][teammates empty])) 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;#########################################################################
+
+;;; Functions for testing
+
+;; blocks-equal?: Block<%> Block<%> -> Boolean
+;; GIVEN: the two blocks
+;; RETURNS: true iff the observable properties of the two blocks are same
+;; STRATEGY: combining simpler functions
+(define (blocks-equal? b1 b2)
+  (and 
+   (=
+    (send b1 block-x)
+    (send b2 block-x))
+   (=
+    (send b1 block-y)
+    (send b2 block-y))
+   (equal?
+    (send b1 block-selected?)
+    (send b2 block-selected?))
+   (equal?
+    (send b1 block-mouse-x)
+    (send b2 block-mouse-y))))
+  
+
+(define (for-test:get-block-pos posn)
+  (list (send  posn block-x) (send posn block-y)))
+
+    (define block1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245] [new-block-x 10]
+                [new-block-y 10][selected? false] 
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty]))
+ 
+  (define block2
+      (list (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245] [new-block-x 10]
+                [new-block-y 10][selected? true] 
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))
+
+;; Testing Framework: 
+(begin-for-test
+ (local
+    ((define block1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 10] [new-block-y 10]
+               [selected? false] 
+                [blocks empty][colour "green "][teammates empty])))
+         (check-equal? (blocks-equal? (make-block 10 10 empty) block1)
+                       false
+                 "The make-block fuction did not work properly"))
+(local
+    ((define block1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250] )]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? false]
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))
+         (check-equal? (send block1 after-tick)
+                       block1
+                       "The block should have been equal"))
+(local
+    ((define block-key-event
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false]
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))
+         (check-equal? (send block-key-event after-key-event "d")
+                       block-key-event
+                       "The block should have been equal"))
+ (local
+    ((define block-key-event
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false]
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))
+           (send block-key-event after-key-event NEW-BLOCK)
+             (check-equal?
+                        (length (send block-key-event get-team))
+                        1
+                       "The number of blocks should have been equal")
+ (define block-key-event1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false]
+                [blocks block1][colour UNSELECTED-BLOCK][teammates empty]))
+           (send block-key-event after-key-event NEW-BLOCK)
+             (check-equal?
+                        (length (send block-key-event get-team))
+                        2
+                       "The number of blocks should have been equal"))
+ (local
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false]
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))           
+                (send block-button-up after-mouse-event 200 250 BUTTON-UP)
+                (check-equal?
+                 (send block-button-up block-selected?)
+                 false
+                 "The block remained selected even after button up was in the
+                  range"))
+ (local 
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false][colour UNSELECTED-BLOCK]
+               [teammates empty]
+               [blocks (list (new Squareblock% [x 210] [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty][teammates empty]
+                                  ))])))            
+                (send block-button-up after-mouse-event 200 250 BUTTON-DOWN)
+                (check-equal?
+                 (send block-button-up block-selected?)
+                 false
+                 "The block is unselected as after button up was in the
+                  range"))
+ (local 
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false]
+               [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))            
+                (send block-button-up after-mouse-event 200 250 BUTTON-DOWN)
+                (check-equal?
+                 (send block-button-up block-selected?)
+                 false
+                 "The block is unselected as after button up was in the
+                  range")) 
+   (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245] [new-block-x 200]
+                [new-block-y 250][selected? true]
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))           
+                (send block-button-down after-mouse-event 210 240 BUTTON-DOWN)
+                (check-equal?
+                 (send block-button-down block-selected?)
+                 true
+                 "The block remained selected even after button up was in the
+                  range"))
+    (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? true][colour UNSELECTED-BLOCK]
+                [teammates empty]
+                [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))])))           
+                (send block-button-drag after-mouse-event 210 240 DRAG)
+                (check-equal?
+                 (send block-button-drag block-selected?)
+                 true
+                 "The block remained selected even after button up was in the
+                  range")) 
+    (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? true]
+                [blocks empty] [teammates empty][colour "green"])))           
+                (send block-button-drag after-mouse-event 210 240 DRAG)
+                (check-equal?
+                 (send block-button-drag block-selected?)
+                 true
+                 "The block remained selected even after button up was in the
+                  range"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? true]
+                [blocks empty][colour UNSELECTED-BLOCK][teammates empty])))
+                (check-equal?
+                (send block-button-down after-button-down 210 240)                
+                 block-button-down 
+                 "The block remained selected even after button up was in the
+                  range"))
+     (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? true][teammates empty][colour "green"]
+                [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))])))
+                (check-equal?
+                (send block-button-down after-button-down 210 240)                
+                 block-button-down 
+                 "The block remained selected even after button up was in the
+                  range"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down in-block? 0 0)
+                              true                                     
+                 "The block did not get selected even after button
+                 down was in the range"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down in-block? 0 0)
+                              true                                     
+                 "The block did not get selected even after button
+                 down was in the range"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+              [mouse-x 205][mouse-y 245]  [new-block-x 200]
+              [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-x)
+                               200                                      
+                 "The x-cordinate of block is correct"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+              [mouse-x 205][mouse-y 245]  [new-block-x 200]
+              [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+              [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty][teammates empty]))])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-x)
+                               200                                      
+                 "The x-cordinate of block is correct"))
+    
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+              [mouse-x 205][mouse-y 245]  [new-block-x 200]
+              [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty][teammates empty]))])))                 
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-y)
+                              250                                      
+                 "The y-cordinate of block is correct"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+              [mouse-x 205][mouse-y 245]  [new-block-x 200]
+              [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new BlockFirst% [x 230] [y 280]))])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-teammates)
+                               empty                                      
+                 "The teammates of block is correct"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                 [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))])))                  
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-color)
+                              SELECTED-BLOCK                                         
+                 "The color of block is correct"))
+    (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-color)
+                              SELECTED-BLOCK                                         
+                 "The color of block is correct"))
+     (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-mouse-x)
+                              0                                         
+                 "The mouse position of block is correct"))
+      (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+               [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))])))                  
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-mouse-x)
+                              0                                         
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-mouse-y)
+                             0                                        
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))])))                  
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-mouse-y)
+                             0                                        
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-up after-button-up 0 0)
+                (check-equal? (send block-button-up block-color)
+                              UNSELECTED-BLOCK                                         
+                 "The color of block is correct"))
+     (local
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-up after-button-up 0 0)
+                (check-equal? (send block-button-up block-mouse-x)
+                              0                                         
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])][colour UNSELECTED-BLOCK][teammates empty]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true]
+                [blocks empty])))                  
+                (send block-button-up after-button-up 0 0)
+                (check-equal? (send block-button-up block-mouse-y)
+                             0                                        
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-up
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-up after-button-up 0 0)
+                (check-equal? (send block-button-up block-selected?)
+                              false                                         
+                 "The mouse position of block is correct")) 
+     (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-x)
+                               200                                      
+                 "The x-cordinate of block is correct"))
+    (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+             [mouse-x 205][mouse-y 245]   [new-block-x 200]
+             [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-y)
+                               250                                    
+                 "The y-cordinate of block is correct"))
+     (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+              [mouse-x 205][mouse-y 245]  [new-block-x 200]
+              [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-mouse-x)
+                               200                                      
+                 "The y-cordinate of block is correct"))
+      (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+                (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-mouse-y)
+                               250                                      
+                 "The y-cordinate of block is correct"))
+     (local
+    ((define block-button-drag
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))                  
+               (check-equal? (send block-button-drag after-drag 200 250)
+                          block-button-drag                                                   
+                 "The block is not selected"))
+     (local
+    ((define block-button-down
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 200]
+               [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new BlockFirst% [x 230] [y 280]))])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down blocks-touch? 20 30)
+                               false                                      
+                 "The blocks do not is correct"))
+       (local
+    ((define block-draw
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+             [mouse-x 205][mouse-y 245]   [new-block-x 200]
+             [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))
+               (check-equal?
+               (send block-draw add-to-scene)              
+                EMPTY-CANVAS
+                 "The block is not properly displayed") 
+         (define block-draw1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+             [mouse-x 205][mouse-y 245]   [new-block-x 200]
+             [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+             [blocks (list (new Squareblock% [x 210] [y 230][mouse-x 215]
+                                [mouse-y 225][blocks empty]
+                                [teammates empty]))]))
+               (check-equal?
+               (send block-draw1 add-to-scene)              
+                (place-image (square SQUARE-LENGTH "outline" "green")
+                             210 230 EMPTY-CANVAS)
+                 "The block is not properly displayed"))
+
+       
+
+     (local
+    ((define block-button-down
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty][teammates empty])))                  
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down in-block? 0 0)
+                              false                                    
+                 "The block did not get selected even after button
+                 down was in the range")) 
+    (local
+    ((define block-button-down
+      (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+           [teammates empty])))                 
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-x)
+                               210                                      
+                 "The x-cordinate of block is correct"))
+    (local
+    ((define block-button-down
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                 
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-y)
+                               230                                      
+                 "The y-cordinate of block is correct"))
+    (local
+    ((define block-button-down
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))              
+                (send block-button-down after-button-down 200 250)
+                (check-equal? (send block-button-down block-teammates)
+                               empty                                      
+                 "The teammates of block is correct"))
+    (local
+    ((define block-button-down
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))              
+                (send block-button-down after-button-down 215 225)
+                (check-equal? (send block-button-down block-color)
+                              SELECTED-BLOCK                                         
+                 "The color of block is correct"))
+     (local
+    ((define block-button-down
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))              
+                (send block-button-down after-button-down 0 0)
+                (check-equal? (send block-button-down block-mouse-x)
+                              215                                         
+                 "The mouse position of block is  correct"))
+     (local
+    ((define block-button-down
+      (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+           [teammates empty])))                
+                 (send block-button-down after-button-down 215 225)
+                (check-equal? (send block-button-down block-mouse-y)
+                              225                                         
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-up
+      (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+           [teammates empty])))                
+                (send block-button-up after-button-up 210 230)
+                (check-equal? (send block-button-up block-color)
+                              UNSELECTED-BLOCK                                         
+                 "The color of block is correct"))
+     (local
+    ((define block-button-up 
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))                 
+         (send block-button-up after-button-up 215 225)
+                (check-equal? (send block-button-up block-mouse-x)
+                              0                                         
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-up
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))                 
+                 (send block-button-up after-button-up 215 225)
+                (check-equal? (send block-button-up block-mouse-y)
+                              0                                         
+                 "The mouse position of block is correct"))
+     (local
+    ((define block-button-up
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                
+                 (send block-button-up after-button-up 0 0)
+                (check-equal? (send block-button-up block-selected?)
+                              false                                         
+                 "The resultis correct"))
+     (local
+    ((define block-button-drag
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                
+                (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-x)
+                               210                                      
+                 "The x-cordinate of block is correct"))
+    (local
+    ((define block-button-drag
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                 
+                 (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-y)
+                               230                                      
+                 "The y-cordinate of block is correct"))
+     (local
+    ((define block-button-drag
+      (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+           [blocks empty][teammates empty])))                 
+                (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-mouse-x)
+                               215                                      
+                 "The y-cordinate of block is correct"))
+      (local
+    ((define block-button-drag
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                 
+                 (send block-button-drag after-drag 200 250)
+                (check-equal? (send block-button-drag block-mouse-y)
+                               225                                      
+                 "The y-cordinate of block is correct"))
+     (local
+    ((define block-button-drag
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                
+                (check-equal? (send block-button-drag after-drag 200 250)
+                          block-button-drag                                                   
+                 "The block is not selected"))
+     (local
+    ((define block-button-down
+       (new Squareblock% [x 200] [y 250][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates (list (new Squareblock% [x 230] [y 280]
+                                  [mouse-x 215][mouse-y 225][blocks empty]
+                                  [teammates empty]))])))                 
+                (send block-button-down after-button-down 215 225)
+                (check-equal? (send block-button-down blocks-touch? 215 250)
+                               true                                      
+                 "The blocks do not is correct")
+       (check-equal? (send block-button-down blocks-touch? 215 0)
+                               false                                      
+                 "The blocks  is correct"))
+     (local
+    ((define block1
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))                 
+                (send block1 after-button-down 200 250)
+                (check-equal? (send block1 run)
+                               block1                                      
+                 "The function did not return correct value"))
+     (local
+    ((define block1
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty][teammates empty])))                 
+                (send block1 after-button-down 200 250)
+                (check-equal? (send block1 add-stateful-widget)
+                               block1                                      
+                 "The function did not return correct value"))
+     (local
+    ((define block1
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+            [blocks empty]
+            [teammates empty])))                 
+                (send block1 after-button-down 200 250)
+                (check-equal? (send block1 add-widget)
+                               block1                                      
+                 "The function did not return correct value"))
+     (local
+    ((define block-mouse-event
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty]))) 
+         (check-equal? (send block-mouse-event after-mouse-event 10 20 "enter")
+                       block-mouse-event
+                       "The block should have been equal")) 
+ (local
+    ((define block-button-up
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))        
+                (send block-button-up after-mouse-event 200 250 BUTTON-UP)
+                (check-equal?
+                 (send block-button-up block-selected?)
+                 false
+                 "The block remained selected even after button up was in the
+                  range"))
+ (local 
+    ((define block-button-up
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))          
+                (send block-button-up after-mouse-event 200 250 BUTTON-DOWN)
+                (check-equal?
+                 (send block-button-up block-selected?)
+                 false
+                 "The block remained selected even after button up was in the
+                  range"))
+   (local
+    ((define block-button-down
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))           
+                (send block-button-down after-mouse-event 210 240 BUTTON-DOWN)
+                (check-equal?
+                 (send block-button-down block-selected?)
+                 true
+                 "The block remained selected even after button up was in the
+                  range")) 
+    (local
+    ((define block-button-drag
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty]
+            [selected? true])))        
+                (send block-button-drag after-mouse-event 210 240 DRAG)
+                (check-equal?
+                 (send block-button-drag block-selected?)
+                 true
+                 "The block remained selected even after button up was in the
+                  range"))
+         
+      (local
+       ((define block-draw       
+                (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+                     [blocks empty][teammates empty]))) 
+               (check-equal?
+               (send block-draw add-to-scene EMPTY-CANVAS)              
+                (place-image (square SQUARE-LENGTH "outline" UNSELECTED-BLOCK)
+                             210 230 EMPTY-CANVAS)
+                 "The block is not properly displayed"))
+
+  (local
+    ((define squaretoy1 (new BlockFactory%
+                             [initial-pos
+                              (new BlockFirst% [x 200] [y 240])]
+                           [mouse-x 205][mouse-y 245]  [new-block-x 200]
+                           [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))
+ (define block1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250])]
+               [mouse-x 205][mouse-y 245] [new-block-x 10]
+               [new-block-y 10][selected? false] [colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty]))
+                       
+    (define squaretoy2  (new BlockFactory%
+                             [initial-pos 
+                              (new BlockFirst% [x 200] [y 240])]
+                           [mouse-x 205][mouse-y 245]  [new-block-x 200]
+                           [new-block-y 250][selected? true][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks block1]))
+     
+    (send squaretoy1 add-teammate squaretoy2)
+    (send squaretoy1 add-teammate squaretoy2)
+    
+    (check-equal? (for-test:get-block-pos squaretoy1)
+                  (list 200 250)
+                  "square toy after drag returns the right toy is selected") 
+
+   (check-equal? (send squaretoy1 block-selected?)
+                  #true))
+
+  (local
+	    ((define  squaretoy2 (new Squareblock%[x 200][y 250][mouse-x 215]
+                                      [mouse-y 225][blocks empty]
+                                      [teammates empty])))              
+               
+	    (send squaretoy2 after-drag 200 250) 
+	    
+	    (check-equal? (for-test:get-block-pos squaretoy2)
+	                  (list 200 250)
+	                  "square toy after drag returns the right toy is selected")
+	    (check-equal? (send squaretoy2 block-selected?)
+	                  false
+	                  "returns the selected status of the toy on drag"))
+  (local
+	    ((define  squaretoy2 (new Squareblock%[x 200][y 250][mouse-x 215]
+                                      [mouse-y 225][blocks empty]
+                                      [teammates (list (new Squareblock%
+                                                            [x 230] [y 280]
+                                  [mouse-x 215][mouse-y 225][blocks empty]
+                                  [teammates empty]))])))              
+               
+	    (send squaretoy2 after-drag 200 250) 
+	    
+	    (check-equal? (for-test:get-block-pos squaretoy2)
+	                  (list 200 250)
+	                  "square toy after drag returns the right toy is selected")
+	    (check-equal? (send squaretoy2 block-selected?)
+	                  false
+	                  "returns the selected status of the toy on drag")
+    (check-equal? (send squaretoy2 block-mouse-x)
+                  215
+                  "not correct mouse position")
+    (check-equal? (send squaretoy2 block-mouse-y)
+                  225
+                  "not correct mouse position"))
+   (local
+    ((define block1
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))
+     (define block2
+         (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+              [blocks empty]
+            [teammates (list (new Squareblock%
+                                                            [x 230] [y 280]
+                                  [mouse-x 215][mouse-y 225][blocks empty]
+                                  [teammates empty]))]))
+               (send block1 add-teammate block2)
+               (send block1 add-teammate block2)
+              (check-equal? (send block1 block-selected?)
+                            false
+                            "returns the boolean value"))
+    (local
+    ((define block1
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))
+     (define block2
+         (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225]
+              [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))]
+            [teammates (list (new Squareblock%
+                                   [x 230] [y 280]
+                                  [mouse-x 215][mouse-y 225][blocks empty]
+                                  [teammates empty]))]))
+               (send block2 add-teammates-after-drag)
+               (send block1 add-teammates-after-drag)
+              (check-equal? (send block1 block-selected?)
+                            false
+                            "returns the boolean value")
+            (check-equal? (send block1 block-x)
+                            210
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block1 block-y)
+                            230
+                            "returns the y-cordinate of block")
+             (check-equal? (send block2 block-x) 
+                            210
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block2 block-y)
+                            230
+                            "returns the y-cordinate of block"))
+   (local
+    ((define block1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250] )]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))
+     (define block2
+         (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250] )]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new Squareblock% [x 210]
+                                            [y 230][mouse-x 215]
+                                  [mouse-y 225][blocks empty]
+                                  [teammates empty]))]))
+               (send block2 add-teammate block1)
+               (send block1 add-teammate block2)
+              (check-equal? (send block1 block-selected?)
+                            false
+                            "returns the boolean value")
+              (check-equal? (send block2 block-selected?)
+                            false
+                            "returns the boolean value")
+         (check-equal? (send block1 block-x)
+                            200
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block1 block-y)
+                            250
+                            "returns the y-cordinate of block")
+             (check-equal? (send block2 block-x) 
+                            200
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block2 block-y)
+                            250
+                            "returns the y-cordinate of block"))
+   (local
+    ((define block1
+       (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250] )]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? false][colour UNSELECTED-BLOCK][teammates empty]
+                [blocks empty])))
+
+
+     (define block2
+         (new BlockFactory%
+                [initial-pos 
+                (new BlockFirst% [x 200] [y 250] )]
+                [mouse-x 205][mouse-y 245][new-block-x 200]
+                [new-block-y 250][selected? false] [colour UNSELECTED-BLOCK][teammates empty]
+                [blocks (list (new Squareblock% [x 200]
+                                            [y 250][mouse-x 205]
+                                  [mouse-y 245][blocks empty]
+                                  [teammates empty]))]))
+               (send block2 add-teammates-after-drag)
+               (send block1 add-teammates-after-drag)
+              (check-equal? (send block1 block-x)
+                            200
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block1 block-y)
+                            250
+                            "returns the y-cordinate of block")
+             (check-equal? (send block2 block-x) 
+                            200
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block2 block-y)
+                            250
+                            "returns the y-cordinate of block")
+            (check-equal? (send block2 blocks-touch? 10 20)
+                               true                                      
+                 "The blocks do not is correct")
+              (check-equal? (send block2 blocks-touch? 215 0)
+                            false 
+                            "returns the boolean value"))
+ (local
+    ((define block1
+       (new Squareblock% [x 210] [y 230][mouse-x 215][mouse-y 225][blocks empty]
+            [teammates empty])))
+     (define block2
+         (new Squareblock% [x 210] [y 200][mouse-x 215][mouse-y 225]
+              [blocks (list (new Squareblock% [x 300]
+                                            [y 350][mouse-x 305]
+                                  [mouse-y 345][blocks empty][teammates empty]))]
+            [teammates (list (new Squareblock%
+                                   [x 430] [y 480]
+                                  [mouse-x 415][mouse-y 425][blocks empty]
+                                  [teammates empty]))]))
+              (send block2 add-teammates-after-drag)
+             (send block1 add-teammates-after-drag)
+              
+              (check-equal? (send block1 block-selected?)
+                            false
+                            "returns the boolean value")
+            (check-equal? (send block1 block-x)
+                            210
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block1 block-y)
+                            230
+                            "returns the y-cordinate of block")
+             (check-equal? (send block2 block-x) 
+                            210
+                            "returns the x co-ordinate of block")
+              (check-equal? (send block2 block-y)
+                            200
+                            "returns the y-cordinate of block")))
